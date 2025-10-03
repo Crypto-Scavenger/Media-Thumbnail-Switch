@@ -30,11 +30,15 @@ class MTS_Core {
 	public function __construct( $database ) {
 		$this->database = $database;
 		
-		add_filter( 'intermediate_image_sizes_advanced', array( $this, 'filter_image_sizes' ), 10, 2 );
+		// High priority to ensure we filter before other plugins
+		add_filter( 'intermediate_image_sizes_advanced', array( $this, 'filter_image_sizes' ), 999, 2 );
+		
+		// Also hook into intermediate_image_sizes (for simpler filtering)
+		add_filter( 'intermediate_image_sizes', array( $this, 'filter_simple_image_sizes' ), 999 );
 	}
 
 	/**
-	 * Filter image sizes during thumbnail generation
+	 * Filter image sizes during thumbnail generation (advanced)
 	 *
 	 * @param array $sizes    Registered image sizes
 	 * @param array $metadata Image metadata
@@ -54,7 +58,7 @@ class MTS_Core {
 			return $sizes;
 		}
 		
-		// Remove disabled sizes
+		// Remove disabled sizes (works for WordPress, theme, and plugin sizes)
 		foreach ( $disabled_sizes as $size_name ) {
 			if ( isset( $sizes[ $size_name ] ) ) {
 				unset( $sizes[ $size_name ] );
@@ -62,6 +66,30 @@ class MTS_Core {
 		}
 		
 		return $sizes;
+	}
+
+	/**
+	 * Filter simple image size names
+	 *
+	 * @param array $sizes Size names
+	 * @return array Filtered size names
+	 */
+	public function filter_simple_image_sizes( $sizes ) {
+		$disable_all = $this->database->get_setting( 'disable_all', '0' );
+		
+		// If disable all is enabled, return empty array
+		if ( '1' === $disable_all ) {
+			return array();
+		}
+		
+		$disabled_sizes = $this->database->get_setting( 'disabled_sizes', array() );
+		
+		if ( ! is_array( $disabled_sizes ) || empty( $disabled_sizes ) ) {
+			return $sizes;
+		}
+		
+		// Remove disabled size names
+		return array_diff( $sizes, $disabled_sizes );
 	}
 
 	/**
@@ -148,7 +176,26 @@ class MTS_Core {
 			}
 		}
 		
-		// Default to theme if uncertain
+		// Common plugin patterns
+		$plugin_patterns = array(
+			'woocommerce' => 'woocommerce',
+			'yoast' => 'yoast',
+			'elementor' => 'elementor',
+			'jetpack' => 'jetpack',
+			'buddypress' => 'buddypress',
+			'bbpress' => 'bbpress',
+			'gallery' => 'plugins',
+			'slider' => 'plugins',
+			'portfolio' => 'plugins',
+		);
+		
+		foreach ( $plugin_patterns as $pattern => $type ) {
+			if ( false !== strpos( $size_lower, $pattern ) ) {
+				return 'plugins';
+			}
+		}
+		
+		// Default to theme if uncertain (safer assumption)
 		return 'theme';
 	}
 
