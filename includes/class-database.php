@@ -23,34 +23,107 @@ class MTS_Database {
 	private $settings_cache = null;
 
 	/**
-	 * Activate plugin
+	 * Table exists flag
+	 *
+	 * @var bool|null
 	 */
-	public static function activate() {
+	private static $table_exists = null;
+
+	/**
+	 * Get table name
+	 *
+	 * @return string
+	 */
+	private function get_table_name() {
+		global $wpdb;
+		return $wpdb->prefix . MTS_TABLE_SETTINGS;
+	}
+
+	/**
+	 * Check if table exists
+	 *
+	 * @return bool
+	 */
+	public static function table_exists() {
+		if ( null !== self::$table_exists ) {
+			return self::$table_exists;
+		}
+
+		global $wpdb;
+		$table_name = $wpdb->prefix . MTS_TABLE_SETTINGS;
+		
+		$exists = $wpdb->get_var( $wpdb->prepare( "SHOW TABLES LIKE %s", $table_name ) ) === $table_name;
+		
+		self::$table_exists = $exists;
+		return $exists;
+	}
+
+	/**
+	 * Ensure table exists, create if it doesn't
+	 */
+	public static function ensure_table_exists() {
+		if ( ! self::table_exists() ) {
+			self::create_table();
+			self::$table_exists = null; // Reset cache
+		}
+	}
+
+	/**
+	 * Create database table
+	 */
+	public static function create_table() {
 		global $wpdb;
 		
 		$table_name = $wpdb->prefix . MTS_TABLE_SETTINGS;
 		$charset_collate = $wpdb->get_charset_collate();
 		
-		$sql = $wpdb->prepare(
-			"CREATE TABLE IF NOT EXISTS %i (
-				id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
-				setting_key varchar(191) NOT NULL,
-				setting_value longtext,
-				PRIMARY KEY (id),
-				UNIQUE KEY setting_key (setting_key)
-			) %s",
-			$table_name,
-			$charset_collate
-		);
+		// Use direct SQL for table creation (dbDelta can be finicky)
+		$sql = "CREATE TABLE IF NOT EXISTS `{$table_name}` (
+			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+			setting_key varchar(191) NOT NULL,
+			setting_value longtext,
+			PRIMARY KEY (id),
+			UNIQUE KEY setting_key (setting_key)
+		) {$charset_collate};";
 		
-		require_once( ABSPATH . 'wp-admin/includes/upgrade.php' );
-		dbDelta( $sql );
+		$wpdb->query( $sql );
 		
-		// Set default settings
+		// Verify table was created
+		$table_exists = $wpdb->get_var( $wpdb->prepare( "SHOW TABLES LIKE %s", $table_name ) ) === $table_name;
+		
+		if ( ! $table_exists ) {
+			error_log( 'MTS Error: Failed to create table ' . $table_name );
+		}
+		
+		self::$table_exists = $table_exists;
+		
+		return $table_exists;
+	}
+
+	/**
+	 * Activate plugin
+	 */
+	public static function activate() {
+		// Create table
+		$table_created = self::create_table();
+		
+		if ( ! $table_created ) {
+			// Log error but don't block activation
+			error_log( 'MTS Activation Error: Could not create database table' );
+			return;
+		}
+		
+		// Set default settings only if table was created successfully
 		$instance = new self();
-		$instance->save_setting( 'cleanup_on_uninstall', '0' );
-		$instance->save_setting( 'disable_all', '0' );
-		$instance->save_setting( 'disabled_sizes', array() );
+		
+		// Check if settings already exist before creating defaults
+		$existing_settings = $instance->get_all_settings();
+		
+		if ( empty( $existing_settings ) ) {
+			$instance->save_setting( 'cleanup_on_uninstall', '0' );
+			$instance->save_setting( 'disable_all', '0' );
+			$instance->save_setting( 'disabled_sizes', array() );
+		}
 	}
 
 	/**
@@ -69,9 +142,12 @@ class MTS_Database {
 	 * @return bool|WP_Error Success or error object
 	 */
 	public function save_setting( $key, $value ) {
+		// Ensure table exists
+		self::ensure_table_exists();
+		
 		global $wpdb;
 		
-		$table = $wpdb->prefix . MTS_TABLE_SETTINGS;
+		$table = $this->get_table_name();
 		
 		$result = $wpdb->replace(
 			$table,
@@ -101,14 +177,24 @@ class MTS_Database {
 	 * @return mixed Setting value or default
 	 */
 	public function get_setting( $key, $default = '' ) {
+		// Ensure table exists
+		if ( ! self::table_exists() ) {
+			self::ensure_table_exists();
+			
+			// If still doesn't exist, return default
+			if ( ! self::table_exists() ) {
+				error_log( 'MTS Error: Cannot access settings table' );
+				return $default;
+			}
+		}
+		
 		global $wpdb;
 		
-		$table = $wpdb->prefix . MTS_TABLE_SETTINGS;
+		$table = $this->get_table_name();
 		
 		$value = $wpdb->get_var(
 			$wpdb->prepare(
-				"SELECT setting_value FROM %i WHERE setting_key = %s",
-				$table,
+				"SELECT setting_value FROM `{$table}` WHERE setting_key = %s",
 				$key
 			)
 		);
@@ -130,12 +216,23 @@ class MTS_Database {
 			return $this->settings_cache;
 		}
 		
+		// Ensure table exists
+		if ( ! self::table_exists() ) {
+			self::ensure_table_exists();
+			
+			// If still doesn't exist, return empty array
+			if ( ! self::table_exists() ) {
+				error_log( 'MTS Error: Cannot access settings table' );
+				return array();
+			}
+		}
+		
 		global $wpdb;
 		
-		$table = $wpdb->prefix . MTS_TABLE_SETTINGS;
+		$table = $this->get_table_name();
 		
 		$results = $wpdb->get_results(
-			$wpdb->prepare( "SELECT setting_key, setting_value FROM %i", $table ),
+			"SELECT setting_key, setting_value FROM `{$table}`",
 			ARRAY_A
 		);
 		
@@ -157,9 +254,12 @@ class MTS_Database {
 	 * @return bool Success
 	 */
 	public function delete_setting( $key ) {
+		// Ensure table exists
+		self::ensure_table_exists();
+		
 		global $wpdb;
 		
-		$table = $wpdb->prefix . MTS_TABLE_SETTINGS;
+		$table = $this->get_table_name();
 		
 		$result = $wpdb->delete(
 			$table,
