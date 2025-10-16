@@ -2,10 +2,6 @@
 
 A WordPress plugin that gives you complete control over thumbnail generation, allowing you to selectively disable thumbnail sizes from WordPress core, themes, and plugins.
 
-## Version 1.0.1 - Bug Fixes
-
-This version includes critical bug fixes for database table creation and improved error handling.
-
 ## Features
 
 - **Selective Thumbnail Control**: Choose exactly which thumbnail sizes to generate
@@ -15,32 +11,28 @@ This version includes critical bug fixes for database table creation and improve
 - **Clean Uninstall**: Option to remove all plugin data on uninstall
 - **Performance Optimized**: Uses custom database table to avoid bloating wp_options
 - **Security First**: Built following WordPress coding standards with proper nonce verification and capability checks
-- **Auto-Recovery**: Automatically creates database table if missing
 
 ## What It Does
 
-The plugin hooks into WordPress's thumbnail generation process and prevents selected thumbnail sizes from being created when images are uploaded. This includes:
+The plugin hooks into WordPress's thumbnail generation process (`intermediate_image_sizes_advanced` filter) and prevents selected thumbnail sizes from being created when images are uploaded. This can significantly reduce:
 
-- **WordPress Core Thumbnails**: thumbnail, medium, medium_large, large
-- **Theme Thumbnails**: Any sizes registered by your active theme
-- **Plugin Thumbnails**: Any sizes registered by installed plugins (WooCommerce, Elementor, etc.)
-
-This can significantly reduce:
 - Server storage usage
 - Upload processing time
 - Server CPU/memory usage during uploads
 - Number of files in your uploads directory
+
+### How It Works
+
+1. **Detection**: Scans all registered image sizes from WordPress core, active theme, and plugins
+2. **Categorization**: Automatically groups sizes by their source for easy management
+3. **Filtering**: During image upload, filters out disabled sizes before thumbnail generation
+4. **Regeneration**: Provides batch processing to regenerate existing thumbnails based on new settings
 
 ## Installation
 
 1. Upload the `media-thumbnail-switch` folder to `/wp-content/plugins/`
 2. Activate the plugin through the 'Plugins' menu in WordPress
 3. Navigate to **Tools > Thumbnail Switch** to configure settings
-
-**Note**: On activation, the plugin will automatically create its database table. If you see any errors, try:
-1. Deactivating and reactivating the plugin
-2. Checking your database permissions
-3. Manually visiting the plugin's settings page (which will trigger table creation)
 
 ## Usage
 
@@ -71,72 +63,18 @@ After changing settings, you can regenerate existing thumbnails:
 3. Wait for the batch process to complete
 4. Progress is shown with a percentage indicator
 
-## How Plugin Thumbnail Detection Works
+### Uninstall Options
 
-The plugin uses several methods to identify plugin-generated thumbnail sizes:
+The plugin includes a cleanup setting:
 
-1. **Name Pattern Matching**: Looks for plugin names in the size name (e.g., "woocommerce_thumbnail")
-2. **Active Plugin Check**: Compares size names against active plugins
-3. **Common Patterns**: Recognizes common plugin size patterns (gallery, slider, portfolio, etc.)
-4. **Fallback**: Sizes that can't be identified as WordPress or Plugin are categorized as Theme
-
-### Supported Plugin Patterns
-
-The plugin automatically detects thumbnails from popular plugins including:
-- WooCommerce
-- Elementor
-- Jetpack
-- BuddyPress
-- bbPress
-- Yoast SEO
-- Gallery plugins
-- Slider plugins
-- Portfolio plugins
-
-## Troubleshooting
-
-### Database Table Errors
-
-If you see errors like "Table 'wp_mts_settings' doesn't exist":
-
-1. **Automatic Fix**: The plugin will attempt to create the table automatically on the next page load
-2. **Manual Fix**: Deactivate and reactivate the plugin
-3. **Force Creation**: Visit the plugin's settings page at Tools > Thumbnail Switch
-4. **Check Permissions**: Ensure your WordPress database user has CREATE TABLE permissions
-
-### Thumbnails Still Being Generated
-
-If thumbnails are still being created after disabling them:
-
-1. **Clear Cache**: Clear any caching plugins you have installed
-2. **Check Settings**: Verify the size is actually checked as disabled
-3. **Test Upload**: Upload a new image (existing images won't be affected)
-4. **Priority Issue**: Some plugins may add thumbnails with higher priority - try disabling the plugin temporarily
-5. **Regenerate**: Use the regenerate function to remove existing thumbnails
-
-### Plugin Thumbnails Not Detected
-
-If plugin-generated thumbnails aren't showing in the Plugin category:
-
-1. **Check Naming**: The plugin uses the size name to detect the source
-2. **Manual Check**: Look at the size name - if it contains the plugin name, it should be detected
-3. **Theme Category**: Some plugin sizes may appear in the Theme category if detection fails
-4. **Still Works**: Even if categorized incorrectly, disabling the size will still prevent generation
-
-### Settings Not Saving
-
-If settings don't persist:
-
-1. **Check Permissions**: Verify you have admin/manage_options capability
-2. **Database Error**: Check WordPress debug log for database errors
-3. **Browser Cache**: Clear your browser cache and try again
-4. **Conflict**: Temporarily disable other plugins to check for conflicts
+- **Enabled**: All plugin data (database table and settings) will be removed when the plugin is uninstalled
+- **Disabled** (default): Plugin data is preserved after uninstallation
 
 ## File Structure
 
 ```
 media-thumbnail-switch/
-├── media-thumbnail-switch.php    # Main plugin file with auto-recovery
+├── media-thumbnail-switch.php    # Main plugin file (initialization only)
 ├── README.md                      # This file
 ├── uninstall.php                  # Handles plugin uninstallation
 ├── index.php                      # Security stub
@@ -145,48 +83,113 @@ media-thumbnail-switch/
 │   ├── admin.js                   # Admin page JavaScript
 │   └── index.php                  # Security stub
 └── includes/                      # Plugin classes
-    ├── class-database.php         # Database operations with auto-creation
+    ├── class-database.php         # All database operations
     ├── class-core.php             # Core thumbnail filtering logic
     ├── class-admin.php            # Admin interface and AJAX handlers
     └── index.php                  # Security stub
 ```
 
+## Database Structure
+
+The plugin creates a custom table `{prefix}_mts_settings` to store configuration:
+
+```sql
+CREATE TABLE {prefix}_mts_settings (
+    id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+    setting_key varchar(191) NOT NULL,
+    setting_value longtext,
+    PRIMARY KEY (id),
+    UNIQUE KEY setting_key (setting_key)
+)
+```
+
+### Stored Settings
+
+- `cleanup_on_uninstall`: Whether to remove data on uninstall (0 or 1)
+- `disable_all`: Whether all thumbnail generation is disabled (0 or 1)
+- `disabled_sizes`: Serialized array of disabled thumbnail size names
+
+## Technical Details
+
+### Hooks Used
+
+- `intermediate_image_sizes_advanced`: Filters image sizes during generation
+- `admin_menu`: Adds admin menu item
+- `admin_enqueue_scripts`: Loads admin assets conditionally
+- `wp_ajax_mts_save_settings`: AJAX handler for saving settings
+- `wp_ajax_mts_regenerate_thumbnails`: AJAX handler for thumbnail regeneration
+
+### WordPress APIs Used
+
+- **Plugin API**: Action and filter hooks
+- **Database API**: All database operations use `$wpdb` with prepared statements
+- **Settings API**: Integrated with WordPress admin interface
+- **HTTP API**: AJAX requests for async operations
+- **Filesystem API**: Image file operations during regeneration
+
+### Security Features
+
+- Nonce verification for all form submissions and AJAX requests
+- Capability checks (`manage_options`) on both render and processing
+- SQL injection prevention using `$wpdb->prepare()` with placeholders
+- Output escaping with appropriate context functions
+- Input sanitization for all user data
+- CSRF protection on all state-changing operations
+
+### Performance Optimizations
+
+- Lazy loading: Settings loaded only when needed (not in constructor)
+- Conditional asset loading: Admin assets only load on plugin pages
+- Transient caching: Image size detection cached for 1 hour
+- Batch processing: Thumbnail regeneration processes 10 images at a time
+- Query optimization: Uses WordPress object cache where available
+
 ## Requirements
 
-- **WordPress**: 6.2 or higher
+- **WordPress**: 6.2 or higher (uses `%i` placeholder for table names)
 - **PHP**: 7.4 or higher
 - **Permissions**: `manage_options` capability required
-- **Database**: CREATE TABLE permissions for installation
 
-## Changelog
+## Compatibility
 
-### 1.0.1 (Current)
-- Fixed database table creation issues
-- Added automatic table creation on plugin load
-- Improved error handling and logging
-- Added table existence checks before all database operations
-- Enhanced plugin thumbnail detection with more patterns
-- Better fallback handling for missing tables
+- Works with all themes and plugins that properly register image sizes
+- Compatible with WordPress multisite installations
+- No conflicts with major caching plugins
+- Follows WordPress coding standards and best practices
 
-### 1.0.0
-- Initial release
-- Selective thumbnail disabling by source
-- Disable all thumbnails option
-- Batch thumbnail regeneration
-- Custom database table for settings
-- AJAX-powered admin interface
-- Configurable cleanup on uninstall
+## Frequently Asked Questions
+
+### Will this delete existing thumbnails?
+
+No, the plugin only prevents new thumbnails from being generated. To remove existing thumbnails, use the regenerate function after disabling sizes.
+
+### Can I re-enable sizes later?
+
+Yes, simply uncheck the disabled sizes and save settings. You may want to regenerate thumbnails to create the previously disabled sizes for existing images.
+
+### Does this affect the Media Library?
+
+The Media Library will continue to work normally. Images that don't have certain thumbnail sizes will fall back to the full-size image or the closest available size.
+
+### What happens if I disable sizes my theme needs?
+
+Your theme will display images using the next closest available size or the full-size image. This may affect layout in some cases, so test your site after disabling sizes.
+
+### Is this safe to use on production sites?
+
+Yes, the plugin follows WordPress security best practices. However, always test on a staging site first and ensure your theme doesn't break without specific thumbnail sizes.
 
 ## License
 
 This plugin is released under the GPL v2 or later license.
 
-## Support
+## Changelog
 
-If you encounter issues:
-
-1. Check the Troubleshooting section above
-2. Enable WordPress debug logging (WP_DEBUG and WP_DEBUG_LOG)
-3. Check your PHP error logs
-4. Verify database permissions
-5. Try deactivating other plugins to check for conflicts
+### 1.0.0
+- Initial release
+- Selective thumbnail disabling by source (WordPress, Theme, Plugin)
+- Disable all thumbnails option
+- Batch thumbnail regeneration
+- Custom database table for settings
+- AJAX-powered admin interface
+- Configurable cleanup on uninstall
